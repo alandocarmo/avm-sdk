@@ -24,6 +24,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, avm-sdk]
     env:
       CARGO_BUILD_JOBS: 2
+      TMPDIR: /media/futurizt/AVM/tmp
+      TMP: /media/futurizt/AVM/tmp
+      TEMP: /media/futurizt/AVM/tmp
       ACKINACKI_REF: ${{ github.event.inputs.ackinacki_ref || 'avm-dev' }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -63,6 +66,8 @@ jobs:
         if: steps.release.outputs.exists != 'true'
         shell: bash
         run: |
+          export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.93.0 --profile minimal --component clippy --component rustfmt
           rustup target add wasm32-unknown-unknown --toolchain 1.93.0
 
@@ -149,7 +154,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish private GitHub release
+      - name: Publish GitHub release
         if: steps.release.outputs.exists != 'true'
         shell: bash
         run: |
@@ -159,7 +164,7 @@ jobs:
             --repo gosh-sh/avm-sdk \
             --target "${{ steps.release.outputs.sdk_sha }}" \
             --title "AVM SDK from avm-dev ${{ steps.release.outputs.source_sha }}" \
-            --notes "Private Linux x86-64 AVM developer distribution built and release-tested from gosh-sh/acki-nacki commit ${{ steps.release.outputs.source_sha }}."
+            --notes "Linux x86-64 AVM developer distribution built and release-tested from gosh-sh/acki-nacki commit ${{ steps.release.outputs.source_sha }}."
 
       - name: Report existing immutable release
         if: steps.release.outputs.exists == 'true'

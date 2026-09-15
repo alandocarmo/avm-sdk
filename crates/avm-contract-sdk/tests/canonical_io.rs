@@ -144,6 +144,54 @@ fn malformed_or_noncanonical_frames_fail_closed() {
     .is_err());
 }
 
+#[test]
+fn output_bytes_and_error_precedence_are_frozen() {
+    use avm_contract_sdk::{CodeUpgradeIntent, EncodeError};
+
+    assert_eq!(
+        encode_message_output(&MessageOutput::failure(1000)).unwrap(),
+        [b"ACMO".as_slice(), &1000u32.to_le_bytes(), &[0; 17]].concat(),
+    );
+    let mut output = MessageOutput::success(StateUpdate::FullReplace(vec![10, 11]));
+    assert_eq!(
+        encode_message_output(&output).unwrap(),
+        [b"ACMO".as_slice(), &[0; 4], &[1, 0, 0, 0, 0, 2, 0, 0, 0, 10, 11], &[0; 16]].concat(),
+    );
+    output.code_upgrade_intent =
+        Some(CodeUpgradeIntent { target_selected_code_id: [12; 32], expected_code_hash: [13; 32] });
+    let encoded = encode_message_output(&output).unwrap();
+    assert_eq!(encoded[8], 3);
+    assert_eq!(&encoded[encoded.len() - 64..], [&[12; 32][..], &[13; 32][..]].concat());
+    // Preserve the existing missing-state upgrade behavior in this slice.
+    output.state_update = None;
+    assert_eq!(encode_message_output(&output), Err(EncodeError::MissingStateUpdate));
+    output.status_code = 7;
+    assert_eq!(encode_message_output(&output), Err(EncodeError::InvalidStatusCode));
+    output.status_code = 1000;
+    assert_eq!(encode_message_output(&output), Err(EncodeError::EffectsOnFailure));
+
+    let mut output = MessageOutput::success(StateUpdate::DataPatchList(vec![StatePatch {
+        offset: u32::MAX,
+        old_len: 1,
+        new_bytes: vec![1],
+    }]));
+    output.callback_intents.push(CallbackIntent { outbound_index: 0, handler_method_id: 0 });
+    assert_eq!(encode_message_output(&output), Err(EncodeError::InvalidPatchOrder));
+    output.state_update = Some(StateUpdate::FullReplace(Vec::new()));
+    assert_eq!(encode_message_output(&output), Err(EncodeError::InvalidCallback));
+    output.event_intents.push(EventIntent {
+        input_index: 0,
+        kind: EventKind::External,
+        event_class: 1,
+        event_name: "event".into(),
+        topics: Vec::new(),
+        fields_binary: vec![0],
+    });
+    assert_eq!(encode_message_output(&output), Err(EncodeError::InvalidEvent));
+    output.event_intents[0].event_name = "x".repeat(usize::from(u16::MAX) + 1);
+    assert_eq!(encode_message_output(&output), Err(EncodeError::LengthOverflow));
+}
+
 fn address(dapp: u8, account: u8) -> AccountAddress {
     AccountAddress { dapp_id: [dapp; 32], account_id: [account; 32] }
 }
