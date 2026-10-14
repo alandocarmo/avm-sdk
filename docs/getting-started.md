@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-- Linux x86-64;
-- GitHub CLI authenticated for `gosh-sh/avm-sdk`;
+- Linux x86-64-v3 with the GLIBC version listed for the actual release binaries;
+- Bash, Python 3.11+ and GitHub CLI (the repository is public);
 - `jq`;
-- Rustup with the `wasm32-unknown-unknown` target.
+- Rust/Cargo 1.93.0 with its `wasm32-unknown-unknown` target and rust-lld.
 
 The installer places the selected release under
 `${AVM_SDK_HOME:-$HOME/.local/share/avm-sdk}` and links its commands into
@@ -25,6 +25,8 @@ under `target/avm`.
 
 ```bash
 cp -R examples/contract-a-v1 examples/my-avm-contract
+# Keep the supplied lock, or explicitly resolve/review dependencies after edits:
+# cargo +1.93.0 generate-lockfile --manifest-path examples/my-avm-contract/Cargo.toml
 avm-contract-build build \
   --manifest-path examples/my-avm-contract/Cargo.toml
 ```

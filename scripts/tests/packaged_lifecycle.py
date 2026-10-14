@@ -15,23 +15,22 @@ import shutil
 import struct
 import subprocess
 
+import blake3 as reference_blake3
+
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
 def blake3(data):
-    result = subprocess.run(["b3sum", "--no-names"], input=data, capture_output=True, check=True)
-    digest = result.stdout.decode().strip()
-    assert len(digest) == 64
-    return bytes.fromhex(digest)
+    return reference_blake3.blake3(data).digest()
 
 
 def u32(data, offset):
     return struct.unpack_from("<I", data, offset)[0]
 
 
-def read_accounts(path):
+def read_state(path):
     """Independent read-only decoder of the published developer-state prefix."""
     data = path.read_bytes()
     assert data[:8] == b"AVMLSF01"
@@ -71,7 +70,79 @@ def read_accounts(path):
             "image": image.hex(),
             "data": image[start + 4:],
         }
-    return accounts, data[204:236].hex()
+    nonces = u32(data, position)
+    position += 4 + nonces * 104
+    assert u32(data, position) == 0, "successful public operations must drain the queue"
+    position += 4
+    receipts = u32(data, position)
+    position += 4 + receipts * 136
+    count = u32(data, position)
+    position += 4
+    assert count == receipts
+    transcript = []
+    for _ in range(count):
+        size = u32(data, position)
+        position += 4
+        wire = data[position:position + size]
+        assert len(wire) == size
+        transcript.append(wire)
+        position += size
+    return accounts, data[204:236].hex(), transcript
+
+
+def read_accounts(path):
+    return read_state(path)[:2]
+
+
+def wasm_facts(data, batch):
+    """Independent section decoder; no builder/admission implementation is imported."""
+    def leb(position):
+        value = 0
+        for shift in range(0, 35, 7):
+            byte = data[position]
+            position += 1
+            value |= (byte & 127) << shift
+            if byte < 128:
+                return value, position
+        raise AssertionError("oversized WASM integer")
+
+    assert data[:8] == b"\0asm\1\0\0\0"
+    position, exports, memory = 8, {}, None
+    while position < len(data):
+        section = data[position]
+        size, position = leb(position + 1)
+        end = position + size
+        assert end <= len(data) and section != 0, "custom/truncated section survived admission"
+        if section == 2:
+            count, _ = leb(position)
+            assert count == 0, "imports are forbidden"
+        if section == 5:
+            count, cursor = leb(position)
+            flags, cursor = leb(cursor)
+            minimum, cursor = leb(cursor)
+            maximum, cursor = leb(cursor)
+            assert count == 1 and flags == 1 and cursor == end
+            assert 1 <= minimum <= maximum == 512
+            memory = {"minimum_bytes": minimum * 65536, "maximum_bytes": maximum * 65536}
+        if section == 7:
+            count, cursor = leb(position)
+            for _ in range(count):
+                length, cursor = leb(cursor)
+                name = data[cursor:cursor + length].decode()
+                cursor += length
+                kind = data[cursor]
+                index, cursor = leb(cursor + 1)
+                assert name not in exports
+                exports[name] = {"kind": kind, "index": index}
+            assert cursor == end
+        position = end
+    required = {"memory", "avm_guest_alloc", "avm_guest_free", "init", "process_message"}
+    if batch:
+        required.add("process_batch")
+    assert set(exports) == required and memory is not None
+    assert exports["memory"] == {"kind": 2, "index": 0}
+    assert all(value["kind"] == 0 for key, value in exports.items() if key != "memory")
+    return {"memory": memory, "exports": exports}
 
 
 class Journey:
@@ -97,7 +168,10 @@ class Journey:
         stem.with_suffix(".argv.json").write_text(json.dumps(argv))
         assert process.returncode == expected, (argv, process.returncode, process.stderr.decode(), process.stdout.decode())
         value = json.loads(process.stdout)
-        assert value["status"] == ("ok" if expected == 0 else "error"), value
+        expected_status = "ok" if expected == 0 else "error"
+        if expected == 2 and value.get("error") == "funding_required":
+            expected_status = "precondition"
+        assert value["status"] == expected_status, value
         return value
 
     def timing(self, fee=1):
@@ -172,7 +246,7 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
         assert rejection.returncode == 2
         assert json.loads(rejection.stdout)["status"] == "error"
         assert incompatible_state.read_bytes() == before
-    artifacts = {}
+    artifacts, admission = {}, {}
     for example in ("contract-a-v1", "contract-a-v2", "contract-b", "contract-batch-patch"):
         root = bundle / "examples" / example
         process = subprocess.run([str(bundle / "bin/avm-contract-build"), "build", "--manifest-path", str(root / "Cargo.toml")], capture_output=True)
@@ -190,10 +264,12 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
         assert values["contract.acab"][:4] == b"ACAB"
         assert len(values["contract.descriptor"]) == 66
         artifacts[example] = {name: sha(data) for name, data in values.items()}
+        admission[example] = wasm_facts(values["contract.wasm"], example == "contract-batch-patch")
     assert artifacts["contract-a-v1"]["contract.acab"] == artifacts["contract-a-v2"]["contract.acab"]
     assert artifacts["contract-a-v1"]["contract.descriptor"] == artifacts["contract-a-v2"]["contract.descriptor"]
     assert artifacts["contract-a-v1"]["contract.wasm"] != artifacts["contract-a-v2"]["contract.wasm"]
     (evidence / "artifacts.json").write_text(json.dumps(artifacts, indent=2))
+    (evidence / "admission.json").write_text(json.dumps(admission, indent=2))
 
     version = Journey(bundle, evidence, "version-upgrade")
     version.run("init", dapp_id="11" * 32)
@@ -213,10 +289,19 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
     selected = read_accounts(version.state)[0][upgraded]["selected_code_id"]
     before = read_accounts(version.state)[0][address]["data"]
     # Authorization is exercised by real WASM, not merely CLI argument parsing.
-    version.run("upgrade", address=address, selected_code_id=selected,
+    before_selection = read_accounts(version.state)[0][address]["selected_code_id"]
+    rejected = version.run("upgrade", expected=2, address=address, selected_code_id=selected,
                 migration_payload_hex=b"avm-a-v2-migrate-state!!".hex(),
                 identity="user", **version.timing())
+    assert "did not switch" in rejected["error"]
     assert read_accounts(version.state)[0][address]["data"] == before
+    assert read_accounts(version.state)[0][address]["selected_code_id"] == before_selection
+    rejected = version.run("upgrade", expected=2, address=address, selected_code_id=selected,
+                migration_payload_hex=b"avm-a-v2-migrate-state!?".hex(),
+                identity="package-owner", **version.timing())
+    assert "did not switch" in rejected["error"]
+    assert read_accounts(version.state)[0][address]["data"] == before
+    assert read_accounts(version.state)[0][address]["selected_code_id"] == before_selection
     version.run("upgrade", address=address, selected_code_id=selected,
                 migration_payload_hex=b"avm-a-v2-migrate-state!!".hex(),
                 identity="package-owner", **version.timing())
@@ -230,6 +315,7 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
         sender = journey.deploy("contract-a-v1")
         receiver = journey.deploy(destination_example, command="publish-version")
         ring_before = read_accounts(journey.state)[1]
+        events_before = journey.run("events")["events"]
         method = "causal.b.receive" if callback else "causal.batch.patch"
         body = bytes.fromhex(receiver.replace(":", "")) + blake3(method.encode())[:8]
         body += blake3(b"causal.a.callback")[:8] if callback else bytes(8)
@@ -243,7 +329,8 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
             assert u32(sender_state, 16) == 0 and u32(sender_state, 20) == 16
             assert sender_state[24:40] == bytes([0x99]) * 16
             events = journey.run("events")
-            assert events["count"] >= 2 and len(events["events"]) == events["count"]
+            assert events["count"] == len(events_before) + 2 == len(events["events"])
+            assert events["events"][:len(events_before)] == events_before
             assert ring != ring_before
         else:
             assert len(state) == 65540 and u32(state, 0) == 65536
@@ -252,6 +339,54 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
             failed = journey.call(receiver, "causal.batch.patch")
             assert u32(bytes.fromhex(failed["raw_executor_output"]), 4) == 1401
             assert read_accounts(journey.state)[0][receiver]["data"] == state
+        journey.replay()
+
+    # Build the public receiver's existing failure switches with the packaged
+    # builder. The original four builds above stay unmodified and independently
+    # identified. No private fixture or prebuilt WASM is substituted.
+    negative = bundle / "examples/contract-b-failure"
+    shutil.copytree(bundle / "examples/contract-b", negative, ignore=shutil.ignore_patterns("target"))
+    env = os.environ.copy()
+    env["AVM_E2E_FAILURE_FLOW"] = "1"
+    built = subprocess.run([str(bundle / "bin/avm-contract-build"), "build", "--manifest-path", str(negative / "Cargo.toml")], env=env, capture_output=True)
+    (evidence / "failure-build.stdout").write_bytes(built.stdout)
+    (evidence / "failure-build.stderr").write_bytes(built.stderr)
+    assert built.returncode == 0, built.stderr.decode()
+    failure_wasm = (negative / "target/avm/contract.wasm").read_bytes()
+    assert sha(failure_wasm) != artifacts["contract-b"]["contract.wasm"]
+    wasm_facts(failure_wasm, False)
+    (evidence / "failure-artifacts.json").write_text(json.dumps({p.name: sha(p.read_bytes()) for p in (negative / "target/avm").iterdir()}, indent=2))
+    for label, method, handler, status in [
+        ("trap", "causal.b.drain", (0xc2c6c51bc610249d).to_bytes(8, "little"), 30),
+        ("out-of-fuel", "causal.b.drain", blake3(b"causal.a.version")[:8], 31),
+        ("invalid-event", "causal.b.receive", (0xc2c6c51bc610249d).to_bytes(8, "little"), 44),
+    ]:
+        journey = Journey(bundle, evidence, label)
+        journey.run("init", dapp_id="11" * 32)
+        sender = journey.deploy("contract-a-v1")
+        receiver = journey.deploy("contract-b-failure", command="publish-version")
+        before_accounts, before_ring, before_wires = read_state(journey.state)
+        before_events = journey.run("events")["events"]
+        body = bytes.fromhex(receiver.replace(":", "")) + blake3(method.encode())[:8] + handler
+        called = journey.call(sender, "causal.a.forward", "0x" + body.hex(), value_main=100, extra_currencies="7:40")
+        assert u32(bytes.fromhex(called["raw_executor_output"]), 4) == 0
+        accounts, ring, wires = read_state(journey.state)
+        assert len(wires) == len(before_wires) + 3
+        delivered, callback = wires[-2:]
+        assert delivered[64:128] == bytes.fromhex(sender.replace(":", ""))
+        assert delivered[128:192] == bytes.fromhex(receiver.replace(":", ""))
+        assert callback[:4] == b"\0\1\1\0" and len(callback) == 312
+        assert callback[8:16] == handler
+        assert callback[16:32] == (37).to_bytes(16, "little")
+        assert callback[64:128] == delivered[128:192] and callback[128:192] == delivered[64:128]
+        assert callback[192:224] == blake3(delivered)
+        assert callback[224:288] == delivered[64:128]
+        assert u32(callback, 288) == status
+        assert callback[292:] == (7).to_bytes(4, "little") + (11).to_bytes(16, "little")
+        assert accounts[receiver]["data"] == before_accounts[receiver]["data"]
+        assert accounts[receiver]["selected_code_id"] == before_accounts[receiver]["selected_code_id"]
+        assert accounts[sender]["data"] == (1).to_bytes(8, "little") + bytes(64)
+        assert ring == before_ring and journey.run("events")["events"] == before_events
         journey.replay()
 
     invalid = Journey(bundle, evidence, "invalid-profile")

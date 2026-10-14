@@ -42,12 +42,17 @@ def payload():
         "file": "licenses/Acki-Nacki-Node-LICENSE.md",
         "sha256": digest(files["licenses/Acki-Nacki-Node-LICENSE.md"]),
     }]}]})
+    files["provenance/cargo-artifacts.jsonl"] = b"".join(json_bytes({
+        "reason": "compiler-artifact", "target": {"name": name, "kind": ["bin"]},
+        "executable": f"/qualification-target/release/{name}",
+    }) for name in ("avm-contract-build", "avm-local-stand")) + json_bytes({"reason": "build-finished", "success": True})
     receipt = {
         "schema": "gosh.avm-sdk.build.v1",
         "source_commit": SOURCE,
         "sdk_commit": SDK,
         "profile_sha256": digest(files["profiles/wasmtime-release-profile.v1"]),
         "lock_sha256": digest(files["provenance/runtime.Cargo.lock"]),
+        "compiler_artifacts_sha256": digest(files["provenance/cargo-artifacts.jsonl"]),
         "binaries": {name: digest(data) for name, data in files.items() if name.startswith("bin/")},
     }
     files["provenance/build.json"] = json_bytes(receipt)
@@ -154,6 +159,22 @@ class IntegrityTests(unittest.TestCase):
                 manifest["build_receipt_sha256"] = digest(files["provenance/build.json"])
                 files["BUILD-MANIFEST.json"] = json_bytes(manifest)
                 self.reject(*write_archive(self.root, files))
+
+    def test_receipt_cannot_reuse_another_cargo_artifact_log(self):
+        files = payload()
+        files["provenance/cargo-artifacts.jsonl"] = b"{}\n"
+        self.reject(*write_archive(self.root, files))
+
+    def test_empty_artifact_log_is_not_build_provenance_even_when_rehashed(self):
+        files = payload()
+        files["provenance/cargo-artifacts.jsonl"] = b""
+        receipt = json.loads(files["provenance/build.json"])
+        receipt["compiler_artifacts_sha256"] = digest(b"")
+        files["provenance/build.json"] = json_bytes(receipt)
+        manifest = json.loads(files["BUILD-MANIFEST.json"])
+        manifest["build_receipt_sha256"] = digest(files["provenance/build.json"])
+        files["BUILD-MANIFEST.json"] = json_bytes(manifest)
+        self.reject(*write_archive(self.root, files))
 
     def test_unsafe_paths_types_and_duplicates_reject_before_extraction(self):
         cases = [

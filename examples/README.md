@@ -65,7 +65,9 @@ and narrow state patches without replacing the complete state image.
 ## Build An Example
 
 Install the SDK commands first, then build any example from the repository or
-an installed release:
+a writable development copy of a release. Keep installed immutable release
+directories unchanged: copy the examples together with `crates/avm-contract-sdk`
+so their relative dependency paths still resolve before building:
 
 ```bash
 avm-contract-build build \

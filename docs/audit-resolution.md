@@ -50,6 +50,8 @@ release's qualification receipt. A listed assertion is not a claim that it ran.
   exact node owner license with its original scope; resolved dependencies carry
   their own license expressions, source identities and notice texts. Packaging
   grants no additional rights and must fail if required notices are missing.
+  `test_license_inputs.py` binds omitted notices to exact upstream commits and
+  checks crate archive/source hashes independently against the runtime lock.
 
 Retain every failed gate with its cause. Zero matched tests, unavailable evidence,
 changed inputs after a gate, and an empty-state smoke are not release passes.
