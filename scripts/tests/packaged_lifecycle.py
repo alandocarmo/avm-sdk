@@ -279,12 +279,14 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
     assert bytes.fromhex(call["raw_executor_output"])[:4] == b"ACMO"
     assert u32(bytes.fromhex(call["raw_executor_output"]), 4) == 0
     assert call["state_decode_error"] is None
-    before_oog = version.state.read_bytes()
-    exhausted = version.run("call", expected=2, address=address, method="causal.a.version",
-                            args_json="null", identity="user", value_main=0, extra_currencies="",
-                            **version.timing(fee=0))
-    assert "VM status 31" in exhausted["error"], exhausted
-    assert version.state.read_bytes() == before_oog, "out-of-FUEL external call must not publish effects"
+    # External routes require a positive fee before WASM can start. Real guest
+    # FUEL exhaustion remains a separate status-31 failure-flow assertion below.
+    before_unpaid = version.state.read_bytes()
+    unpaid = version.run("call", expected=2, address=address, method="causal.a.version",
+                         args_json="null", identity="user", value_main=0, extra_currencies="",
+                         **version.timing(fee=0))
+    assert unpaid["error"] == "call rejected canonical operation: local call charge failed: RouteRequiresFee", unpaid
+    assert version.state.read_bytes() == before_unpaid, "unpaid external call must not publish effects"
     upgraded = version.deploy("contract-a-v2", command="publish-version")
     selected = read_accounts(version.state)[0][upgraded]["selected_code_id"]
     before = read_accounts(version.state)[0][address]["data"]
