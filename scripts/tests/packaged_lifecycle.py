@@ -154,6 +154,11 @@ class Journey:
         self.profile = bundle / "profiles/wasmtime-release-profile.v1"
         self.sequence = 0
         self.time = 1_800_000_000
+        self.label = label
+        self.command_history = []
+        self.initial_state = None
+        self.identities = None
+        self.current = json.loads((bundle / "BUILD-MANIFEST.json").read_bytes())["schema"] == "gosh.avm-sdk.release.v2"
 
     def run(self, command, expected=0, **options):
         argv = [str(self.bundle / "bin/avm-local-stand"), command,
@@ -172,6 +177,11 @@ class Journey:
         if expected == 2 and value.get("error") == "funding_required":
             expected_status = "precondition"
         assert value["status"] == expected_status, value
+        if command == "init" and expected == 0:
+            self.initial_state = self.state.read_bytes()
+            self.identities = value["identities"]
+        elif command in {"fund-user", "deploy", "publish-version", "call", "upgrade"}:
+            self.command_history.append((command, expected, options.copy(), value))
         return value
 
     def timing(self, fee=1):
@@ -204,7 +214,17 @@ class Journey:
                         **self.timing(), **extra)
 
     def replay(self):
+        from fixture_oracle import decode_state, expected_journey, verify_contents
+
+        def independent(stand, inspected):
+            contents, header_roots, inputs, times = decode_state(stand.state.read_bytes())
+            assert header_roots["registry_root"] == inspected["registry_root"]
+            expected = expected_journey(stand.bundle, self.label, self.identities, inputs, times, self.current)
+            roots = {**header_roots, "account_state_root": inspected["account_state_root"]}
+            return verify_contents(contents, expected, roots, self.current)
+
         inspected = self.run("inspect")
+        roots = independent(self, inspected)
         accounts, ring = read_accounts(self.state)
         before = self.state.read_bytes()
         replayed = self.run("replay")
@@ -213,9 +233,27 @@ class Journey:
         assert replayed["receipt_count"] == len(inspected["receipts"]) > 0
         assert read_accounts(self.state) == (accounts, ring)
         assert self.state.read_bytes() == before
+        # Replay the public command inputs into a different state, starting from
+        # the exact empty CLI-created identity/config seed. No internal message
+        # injection, root edits, private executor or prebuilt WASM is involved.
+        assert self.initial_state is not None and self.identities is not None
+        restored = Journey(self.bundle, self.evidence.parent, self.label + "-command-replay")
+        descriptor = os.open(restored.state, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(self.initial_state)
+        for command, expected_status, options, original_result in self.command_history:
+            assert restored.run(command, expected=expected_status, **options) == original_result
+        restored_inspected = restored.run("inspect")
+        restored_roots = independent(restored, restored_inspected)
+        restored.run("replay")
+        assert restored.state.read_bytes() == before
+        assert self.state.read_bytes() == before
         (self.evidence / "roots.json").write_text(json.dumps({
-            "account_state_root": inspected["account_state_root"],
-            "registry_root": inspected["registry_root"], "internal_event_ring_root": ring,
+            **roots, "public_command_replay_roots": restored_roots,
+            "independent_oracle": "bounded-public-journeys-v1",
+            "verified_contents": ["full account bodies and balances", "full account-index metadata",
+                                  "all registry records and code/ABI blobs", "all canonical event bytes",
+                                  "all canonical ring records"],
             "receipts": inspected["receipts"], "cumulative_fee_shells": inspected["cumulative_fee_shells"],
         }, indent=2))
 
@@ -450,6 +488,11 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
         "historical_limitations": [] if current else [
             "Fixed example owner differs from the public CLI-generated owner; upgrade rejection was verified."
         ],
+        "internal_event_reads": {
+            "capability": "UNSUPPORTED_IN_REVIEWED_ABI",
+            "package_execution": "NOT_EXECUTED_THROUGH_PUBLIC_PACKAGE", "passed": None,
+            "reason": "Current guest OutboundIntent wire has no read-request field; external inputs forbid it. Source block-start visibility/burn/fallback and injection-rejection assertions remain mandatory. Packaged event coverage is emission/listing only.",
+        },
     }, indent=2))
 
 

@@ -41,6 +41,56 @@ def file_digest(path):
     return value.hexdigest()
 
 
+def parse_profile(data):
+    """Closed v1 grammar; never discard duplicates or ignore malformed fields."""
+    require(isinstance(data, bytes) and 0 < len(data) <= 8192 and data.isascii()
+            and data.endswith(b"\n") and all(value == 10 or 33 <= value <= 126 for value in data),
+            "invalid profile encoding")
+    fields = {}
+    for line in data.decode("ascii").splitlines():
+        require(re.fullmatch(r"[a-z][a-z0-9_]*=[!-~]+", line), "malformed profile field")
+        key, value = line.split("=", 1)
+        require(key not in fields, "duplicate profile field: " + key)
+        fields[key] = value
+    grammar = {}
+
+    def group(pattern, names):
+        for name in names.split():
+            grammar[name] = pattern
+
+    group(r"[0-9]+\.[0-9]+\.[0-9]+", "wasmtime_version cranelift_codegen_version wasmparser_version rustc_version cargo_version")
+    group(r"[0-9a-f]{64}", "wasmtime_sha256 cranelift_codegen_sha256 wasmparser_sha256 cargo_lock_sha256")
+    group(r"[0-9a-f]{40}", "rustc_commit cargo_commit")
+    group(r"(?:0|[1-9][0-9]*)", "profile_encoding_version wasm_profile_id memory_guard_size pooling_max_unused_warm_slots pooling_decommit_batch_size pooling_linear_memory_keep_resident pooling_total_component_instances pooling_max_core_instances_per_component pooling_max_memories_per_component pooling_max_tables_per_component pooling_total_gc_heaps fuel_semantics_revision trap_mapping_revision instance_pre_abi_revision")
+    group(r"(?:true|false)", "cranelift_nan_canonicalization consume_fuel epoch_interruption parallel_compilation memory_init_cow signals_based_traps debug_info native_unwind_info generate_address_map wasm_backtrace wasm_tail_call wasm_custom_page_sizes wasm_threads wasm_shared_everything_threads wasm_reference_types wasm_function_references wasm_wide_arithmetic wasm_gc wasm_simd wasm_relaxed_simd wasm_bulk_memory wasm_multi_value wasm_multi_memory wasm_memory64 wasm_extended_const wasm_stack_switching wasm_component_model wasm_component_model_async wasm_component_model_async_builtins wasm_component_model_async_stackful wasm_component_model_error_context wasm_component_model_gc wasm_exceptions wasm_legacy_exceptions")
+    group(r"[a-z0-9_.-]+(?:,[a-z0-9_.-]+)*", "wasmtime_required_features host_features cranelift_flags")
+    literals = {
+        "profile_id": "AVM_WASMTIME_X86_64_V3_V1",
+        "source_registry": "registry+https://github.com/rust-lang/crates.io-index",
+        "target_triple": "x86_64-unknown-linux-gnu", "target_cpu": "x86-64-v3",
+        "wasmtime_feature_attestation": "per_binary_cargo_compiler_artifact",
+        "strategy": "cranelift", "cranelift_opt_level": "speed", "allocation_strategy": "pooling",
+        "memory_reservation": "config.wasm.memory_limit_bytes", "max_wasm_stack": "config.wasm.stack_limit_bytes",
+        "pooling_table_keep_resident": "config.wasm.max_table_elements*8",
+        "pooling_total_core_instances": "local_concurrent_instance_capacity",
+        "pooling_total_memories": "local_concurrent_instance_capacity*config.wasm.max_memories",
+        "pooling_total_tables": "local_concurrent_instance_capacity*config.wasm.max_tables",
+        "pooling_max_memories_per_module": "config.wasm.max_memories",
+        "pooling_max_tables_per_module": "config.wasm.max_tables",
+        "pooling_table_elements": "config.wasm.max_table_elements",
+        "pooling_max_memory_size": "config.wasm.memory_limit_bytes",
+    }
+    grammar.update({name: re.escape(value) for name, value in literals.items()})
+    require(fields.keys() == grammar.keys(), "missing or unknown profile fields")
+    for name, pattern in grammar.items():
+        require(re.fullmatch(pattern, fields[name]), "invalid profile value: " + name)
+    require(fields["profile_encoding_version"] == "1", "unsupported profile encoding version")
+    for name in ("wasmtime_required_features", "host_features", "cranelift_flags"):
+        entries = fields[name].split(",")
+        require(entries == sorted(set(entries)), "noncanonical profile feature list: " + name)
+    return fields
+
+
 def unique_pairs(pairs):
     result = {}
     for key, value in pairs:
@@ -89,6 +139,9 @@ def verify_payload(files, tag):
                 "licenses/Acki-Nacki-Node-LICENSE.md", "THIRD-PARTY-NOTICES.json"}
     required.update("bin/" + name for name in BINARIES)
     require(required <= files.keys(), "missing required release payload")
+    profile = parse_profile(files["profiles/wasmtime-release-profile.v1"])
+    require(profile["cargo_lock_sha256"] == digest(files["provenance/runtime.Cargo.lock"]),
+            "profile declares a different runtime lock")
     manifest = json_object(files["BUILD-MANIFEST.json"])
     require(manifest.get("schema") == "gosh.avm-sdk.release.v2", "unsupported release manifest schema")
     source, sdk = manifest.get("ackinacki_commit", ""), manifest.get("sdk_commit", "")
@@ -112,6 +165,21 @@ def verify_payload(files, tag):
     artifact_bytes = files["provenance/cargo-artifacts.jsonl"]
     require(digest(artifact_bytes) == receipt.get("compiler_artifacts_sha256"), "Cargo build record identity mismatch")
     artifact_records(artifact_bytes)
+    engine_id = profile["source_registry"] + "#wasmtime@" + profile["wasmtime_version"]
+    engines = [row for row in (json_object(line) for line in artifact_bytes.splitlines() if line.strip())
+               if row.get("reason") == "compiler-artifact" and row.get("package_id") == engine_id
+               and row.get("target", {}).get("name") == "wasmtime"]
+    require(len(engines) == 1, "missing or ambiguous engine compiler artifact")
+    features = engines[0].get("features")
+    require(isinstance(features, list) and all(isinstance(value, str) for value in features), "invalid engine features")
+    require(features == sorted(set(features))
+            and set(profile["wasmtime_required_features"].split(",")) <= set(features)
+            and "component-model-async" not in features, "unqualified engine features")
+    engine_builds = receipt.get("engine_builds", {})
+    require(isinstance(engine_builds, dict) and set(engine_builds) == set(BINARIES), "missing per-binary engine attestation")
+    for name, built in engine_builds.items():
+        require(isinstance(built, dict) and built.get("package_id") == engine_id
+                and built.get("features") == features, "binary engine attestation mismatch: " + name)
     notices = json_object(files["THIRD-PARTY-NOTICES.json"])
     require(notices.get("packages"), "missing dependency license inventory")
     toolchain = notices.get("rust_toolchain", {})

@@ -26,6 +26,12 @@ guest patch. Since the preceding public release:
   Pool capacity remains runtime configuration. Fresh stores, isolation, FUEL,
   deterministic output and rejection precedence remain enforced; cancellation
   cannot publish partial effects.
+  Threads and component-model proposals are explicitly disabled in the shared
+  AVM constructor, including when the node compiles Wasmtime's broader default
+  features. Parallel compilation is explicitly enabled. Exact compiled Cargo
+  features are attested per binary; the shared profile states required build
+  capabilities and effective engine settings. The node's other component
+  engine retains its existing functionality.
 - Isolated-message admission follows count/byte limits without truncating a
   valid prefix by cumulative paid FUEL allowance.
 
@@ -50,9 +56,21 @@ release directories are immutable; activation atomically replaces `current`.
 Unrelated commands are preserved. SHA-256 supplies integrity under the GitHub
 release/HTTPS trust boundary, not a separate publisher signature. Historical v1
 packages lack the required v2 provenance and are not silently accepted.
+The profile has a closed grammar: missing, duplicate, unknown or malformed fields
+reject. Its declared Cargo.lock hash must match the packaged lock, even if all
+outer, inner, manifest and receipt hashes have been recomputed consistently.
 
-The stand includes merged block-start event reads, failed-batch burn accounting
-and exhausted-pool fallback settlement. The builder checks full Rust/Cargo 1.93.0
+The stand includes merged source-level block-start event-read handling,
+failed-batch burn accounting and exhausted-pool fallback settlement. Public
+guest contracts cannot currently originate internal-event read requests:
+the reviewed OutboundIntent ABI has no such field, and external messages forbid
+it. This pre-existing capability is `UNSUPPORTED_IN_REVIEWED_ABI` and
+`NOT_EXECUTED_THROUGH_PUBLIC_PACKAGE`; its coverage receipt records `passed: null`.
+Packaged event coverage proves emission and listing. Source visibility/burn/
+fallback assertions and rejection of public VM-owned injection remain required.
+This release adds no wire field or public injection path for event reads.
+
+The builder checks full Rust/Cargo 1.93.0
 commits, uses the corresponding rust-lld, rejects compiler wrappers, and requires
 a reviewed Cargo.lock. It compiles twice with --locked. The three output artifacts
 remain unchanged; `target/avm-build-provenance.txt` separately records compiler,
@@ -99,6 +117,10 @@ and compiler negatives, allocator/free/FUEL precedence, cancellation/isolation,
 compact roots/proof negatives, EventLog vectors/rejections, isolated admission,
 stand corrections and the full standard-contract E2E. See the
 [finding-to-diff-to-assertion ledger](audit-resolution.md).
+The six existing WASM admission/preparation integration suites must actually run
+with nonzero counts. SDK and node resolved graphs, an actual node release build,
+and engine/FUEL/isolation/cancellation assertions under its compiled Wasmtime
+features supplement the SDK graph qualification.
 
 Contract A now accepts a compile-time `AVM_EXAMPLE_PACKAGE_OWNER_PUBKEY` public
 key so the upgrade example can authorize the public stand's generated owner.
@@ -111,7 +133,13 @@ qualification records that rejection rather than claiming a successful upgrade.
 The packaged gate independently builds all four public examples with the
 shipped builder and exercises the shipped stand: admission/deploy/call, events,
 batch patches, errors/FUEL, explicit upgrades and populated replay. It verifies
-artifact hashes, account images and all three retained roots. Invalid profile,
+artifact hashes and independently constructs complete expected account bodies,
+balances, index metadata, Library records and canonical event/ring bytes from
+the public fixture inputs. A bounded primitive-encoding oracle recomputes all
+three roots for both current CompactV1 and the historical legacy bundle.
+The same public commands are replayed from their empty identity/config seed;
+both resulting states must match those independently specified contents and
+roots. Frozen vectors and leaf/root mutations test the oracle itself. Invalid profile,
 old-state/new-profile, package mutation and compiler mismatch negatives must
 reject. Post-publication downloads are independently checked. Empty-state smoke
 and the presence of a source test do not establish any of these results.

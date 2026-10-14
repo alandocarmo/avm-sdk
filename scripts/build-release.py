@@ -14,7 +14,7 @@ import tarfile
 import tomllib
 
 from manual_gates import clean, head
-from release import ARCHIVE, BINARIES, ROOT, artifact_records, digest, file_digest, require, verify_archive
+from release import ARCHIVE, BINARIES, ROOT, artifact_records, digest, file_digest, parse_profile, require, verify_archive
 
 RUST_NOTICE_SHA256 = {
     "COPYRIGHT.html": "ed776cb483639823551326501ea4a7d0e63a040a5589d25d68234c223bd9d9f9",
@@ -166,7 +166,7 @@ def identity(source, sdk):
     require(profile.read_bytes() == (sdk / "profiles/wasmtime-release-profile.v1").read_bytes(), "source/SDK profile mismatch")
     lock = source / "Cargo.lock"
     require(capture(["git", "ls-files", "--error-unmatch", "Cargo.lock"], source) == "Cargo.lock", "runtime lock must be committed")
-    fields = dict(line.split("=", 1) for line in profile.read_text().splitlines())
+    fields = parse_profile(profile.read_bytes())
     require(fields["cargo_lock_sha256"] == file_digest(lock), "profile does not bind the actual runtime lock")
     locked = tomllib.loads(lock.read_text())["package"]
     for name, key in [("wasmtime", "wasmtime"), ("cranelift-codegen", "cranelift_codegen"), ("wasmparser", "wasmparser")]:
@@ -193,7 +193,7 @@ def build(source, sdk, output, gates):
     output.mkdir(parents=True, exist_ok=False)
     target = Path(os.environ["CARGO_TARGET_DIR"]).resolve()
     require(not target.is_relative_to(source) and not target.is_relative_to(sdk), "target directory must be outside source")
-    profile = dict(line.split("=", 1) for line in (source / "specs/avm-vm/wasmtime-release-profile.v1").read_text().splitlines())
+    profile = parse_profile((source / "specs/avm-vm/wasmtime-release-profile.v1").read_bytes())
     rustc = capture(["rustc", "-vV"], source)
     cargo = capture(["cargo", "-vV"], source)
     compiler = Path(capture(["rustc", "--print", "sysroot"], source)) / "bin/rustc"
@@ -248,9 +248,14 @@ def build(source, sdk, output, gates):
         verify_registry_source(package, locked)
     wasmtime_ids = {p["id"] for p in packages if p["name"] == "wasmtime"}
     require(len(wasmtime_ids) == 1, "ambiguous or absent built Wasmtime")
-    for item in artifacts:
-        if item["package_id"] in wasmtime_ids:
-            require(sorted(item["features"]) == sorted(profile["wasmtime_resolved_features"].split(",")), "actual Wasmtime features differ from the profile")
+    wasmtime_builds = [item for item in artifacts if item["package_id"] in wasmtime_ids]
+    require(len(wasmtime_builds) == 1, "ambiguous built Wasmtime feature graph")
+    engine_features = sorted(wasmtime_builds[0]["features"])
+    require(set(profile["wasmtime_required_features"].split(",")) <= set(engine_features),
+            "built Wasmtime lacks a required explicit-config feature")
+    require("component-model-async" not in engine_features, "unqualified component async build feature")
+    require(engine_features == qualification.get("engine_qualification", {}).get("sdk_wasmtime_features"),
+            "packaged Wasmtime features differ from the qualified SDK graph")
     rust_notices, license_files = toolchain_notices(compiler.parent.parent, rustc)
     notices = []
     for package in sorted(packages, key=lambda p: p["id"]):
@@ -277,6 +282,10 @@ def build(source, sdk, output, gates):
                "argv": argv, "rustflags": flags, "source_date_epoch": 0,
                "compiler_artifacts_sha256": file_digest(output / "cargo-artifacts.jsonl"),
                "resolved_features": {item["package_id"]: sorted(item["features"]) for item in artifacts},
+               "engine_builds": {name: {"package_id": wasmtime_builds[0]["package_id"],
+                                         "features": engine_features,
+                                         "scope": "Actual shared Wasmtime artifact linked by this combined Cargo build"}
+                                 for name in BINARIES},
                "source_gates_sha256": file_digest(gates)}
     (output / "build.json").write_bytes(json_bytes(receipt))
     print(json.dumps({"built": ids, "binaries": executed}))
