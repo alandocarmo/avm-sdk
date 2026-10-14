@@ -90,6 +90,12 @@ def main():
     # Preserve every pre-existing release gate, then add the audited owner cases.
     for package in ("avm-test-harness", "avm-contract-sdk", "avm-contract-build", "avm-wasm-code"):
         test(package, ["--lib"])
+    # Library tests and --all-targets check/clippy do not execute these owner
+    # admission/preparation boundaries (SDK-R167-005).
+    for target in ("validate_wasm_module", "prepare_code", "get_prepared",
+                   "invalid_forbidden_sections", "invalid_mvp_function_body",
+                   "disabled_feature_encodings"):
+        test("avm-wasm-code", ["--test", target])
     for package in ("avm-code-registry", "avm-deploy-upgrade", "avm-economics", "avm-config"):
         test(package, [])
     test("avm-effect-materializer", ["--test", "zero_intent_checkpoint"])

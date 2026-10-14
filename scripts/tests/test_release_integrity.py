@@ -20,6 +20,7 @@ ROOT = "avm-sdk-linux-x86_64"
 SOURCE = "1" * 40
 SDK = "2" * 40
 TAG = f"avm-dev-{SOURCE[:12]}-sdk-{SDK[:12]}"
+PROFILE = Path(__file__).resolve().parents[2] / "profiles/wasmtime-release-profile.v1"
 
 
 def digest(data):
@@ -31,11 +32,17 @@ def json_bytes(value):
 
 
 def payload():
+    lock = b"lock fixture\n"
+    profile = b"".join(
+        b"cargo_lock_sha256=" + digest(lock).encode() + b"\n"
+        if line.startswith(b"cargo_lock_sha256=") else line
+        for line in PROFILE.read_bytes().splitlines(keepends=True)
+    )
     files = {
         "bin/avm-contract-build": b"builder fixture\n",
         "bin/avm-local-stand": b"stand fixture\n",
-        "profiles/wasmtime-release-profile.v1": b"profile fixture\n",
-        "provenance/runtime.Cargo.lock": b"lock fixture\n",
+        "profiles/wasmtime-release-profile.v1": profile,
+        "provenance/runtime.Cargo.lock": lock,
         "LICENSE.md": b"SDK MIT license fixture\n",
         "licenses/Acki-Nacki-Node-LICENSE.md": b"Owner grant fixture\n",
         "licenses/toolchain/COPYRIGHT-library.html": b"Rust and standard-library vendor grants\n",
@@ -188,6 +195,52 @@ class IntegrityTests(unittest.TestCase):
                 manifest["build_receipt_sha256"] = digest(files["provenance/build.json"])
                 files["BUILD-MANIFEST.json"] = json_bytes(manifest)
                 self.reject(*write_archive(self.root, files))
+
+    def test_fully_rehashed_contradictory_or_malformed_profile_preserves_installation(self):
+        valid = payload()["profiles/wasmtime-release-profile.v1"]
+        lock_line = next(line for line in valid.splitlines(keepends=True)
+                         if line.startswith(b"cargo_lock_sha256="))
+        cases = {
+            # All archive, manifest and receipt hashes are independently renewed.
+            # Only the profile's own claim contradicts the packaged lock.
+            "contradictory-lock": valid.replace(lock_line, b"cargo_lock_sha256=" + b"0" * 64 + b"\n"),
+            "missing-lock": valid.replace(lock_line, b""),
+            "duplicate-lock": valid + lock_line,
+            "duplicate-setting": valid + b"consume_fuel=true\n",
+            "missing-setting": valid.replace(b"consume_fuel=true\n", b""),
+            "malformed-line": valid + b"not-an-assignment\n",
+            "unknown-field": valid + b"unapproved=true\n",
+            "malformed-hash": valid.replace(lock_line, b"cargo_lock_sha256=xyz\n"),
+            "malformed-boolean": valid.replace(b"consume_fuel=true\n", b"consume_fuel=yes\n"),
+            "whitespace": valid.replace(b"consume_fuel=true\n", b"consume_fuel= true\n"),
+            "crlf": valid.replace(b"\n", b"\r\n"),
+            "unterminated": valid[:-1],
+            "invalid-encoding": valid + b"\xff\n",
+        }
+        (self.previous / "retained-contract").write_bytes(b"historical state must survive")
+        self.bin_dir.mkdir()
+        unrelated = self.bin_dir / "other-command"
+        unrelated.write_bytes(b"unrelated command")
+        for label, profile in cases.items():
+            with self.subTest(label=label):
+                files = payload()
+                files["profiles/wasmtime-release-profile.v1"] = profile
+                receipt = json.loads(files["provenance/build.json"])
+                receipt["profile_sha256"] = digest(profile)
+                files["provenance/build.json"] = json_bytes(receipt)
+                manifest = json.loads(files["BUILD-MANIFEST.json"])
+                manifest["wasmtime_profile_sha256"] = digest(profile)
+                manifest["build_receipt_sha256"] = digest(files["provenance/build.json"])
+                files["BUILD-MANIFEST.json"] = json_bytes(manifest)
+                archive, checksum = write_archive(self.root, files)
+                with self.assertRaisesRegex(ValueError, "profile"):
+                    self.install(archive, checksum)
+                self.assertEqual((self.sdk_home / "current").resolve(), self.previous)
+                self.assertEqual((self.previous / "retained-contract").read_bytes(),
+                                 b"historical state must survive")
+                self.assertFalse((self.sdk_home / "releases" / TAG).exists())
+                self.assertEqual(list(self.bin_dir.iterdir()), [unrelated])
+                self.assertEqual(unrelated.read_bytes(), b"unrelated command")
 
     def test_receipt_cannot_reuse_another_cargo_artifact_log(self):
         files = payload()
