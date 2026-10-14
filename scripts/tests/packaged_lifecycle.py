@@ -246,10 +246,35 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
         assert rejection.returncode == 2
         assert json.loads(rejection.stdout)["status"] == "error"
         assert incompatible_state.read_bytes() == before
+    version = Journey(bundle, evidence, "version-upgrade")
+    initialized = version.run("init", dapp_id="11" * 32)
+    owner = initialized["identities"]["package_owner"]
+    assert len(owner) == 64 and bytes.fromhex(owner).hex() == owner
+    fixture_owner = "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+    assert owner != fixture_owner, "qualification must use the public CLI's generated identity"
+    (evidence / "example-owner.json").write_text(json.dumps({
+        "package_owner_public_key": owner,
+        "compiled_owner": owner if current else fixture_owner,
+        "configuration": "AVM_EXAMPLE_PACKAGE_OWNER_PUBKEY" if current else "historical fixed fixture key",
+    }, indent=2))
+    if current:
+        negative = bundle / "examples/invalid-package-owner"
+        shutil.copytree(bundle / "examples/contract-a-v1", negative, ignore=shutil.ignore_patterns("target"))
+        for label, invalid_owner in (("length", "81"), ("hex", "zz" * 32)):
+            env = os.environ.copy()
+            env["AVM_EXAMPLE_PACKAGE_OWNER_PUBKEY"] = invalid_owner
+            result = subprocess.run([str(bundle / "bin/avm-contract-build"), "build", "--manifest-path", str(negative / "Cargo.toml")], env=env, capture_output=True)
+            (evidence / f"invalid-owner-{label}.stderr").write_bytes(result.stderr)
+            assert result.returncode != 0
+            assert b"AVM_EXAMPLE_PACKAGE_OWNER_PUBKEY must be 64 lowercase hex digits" in result.stderr
+            assert not (negative / "target/avm/contract.wasm").exists()
     artifacts, admission = {}, {}
     for example in ("contract-a-v1", "contract-a-v2", "contract-b", "contract-batch-patch"):
         root = bundle / "examples" / example
-        process = subprocess.run([str(bundle / "bin/avm-contract-build"), "build", "--manifest-path", str(root / "Cargo.toml")], capture_output=True)
+        env = os.environ.copy()
+        if current and example == "contract-a-v1":
+            env["AVM_EXAMPLE_PACKAGE_OWNER_PUBKEY"] = owner
+        process = subprocess.run([str(bundle / "bin/avm-contract-build"), "build", "--manifest-path", str(root / "Cargo.toml")], env=env, capture_output=True)
         (evidence / f"{example}-build.stdout").write_bytes(process.stdout)
         (evidence / f"{example}-build.stderr").write_bytes(process.stderr)
         assert process.returncode == 0, process.stderr.decode()
@@ -271,8 +296,6 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
     (evidence / "artifacts.json").write_text(json.dumps(artifacts, indent=2))
     (evidence / "admission.json").write_text(json.dumps(admission, indent=2))
 
-    version = Journey(bundle, evidence, "version-upgrade")
-    version.run("init", dapp_id="11" * 32)
     address = version.deploy("contract-a-v1")
     call = version.call(address, "causal.a.version")
     assert bytes.fromhex(call["raw_state"])[16] == 1
@@ -304,11 +327,20 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
     assert "did not switch" in rejected["error"]
     assert read_accounts(version.state)[0][address]["data"] == before
     assert read_accounts(version.state)[0][address]["selected_code_id"] == before_selection
-    version.run("upgrade", address=address, selected_code_id=selected,
+    upgrade = version.run("upgrade", expected=0 if current else 2, address=address, selected_code_id=selected,
                 migration_payload_hex=b"avm-a-v2-migrate-state!!".hex(),
                 identity="package-owner", **version.timing())
-    assert read_accounts(version.state)[0][address]["selected_code_id"] == selected
-    assert bytes.fromhex(version.call(address, "causal.a.version")["raw_state"])[16] == 2
+    if current:
+        assert read_accounts(version.state)[0][address]["selected_code_id"] == selected
+        assert bytes.fromhex(version.call(address, "causal.a.version")["raw_state"])[16] == 2
+    else:
+        # The immutable historical example authorizes only its fixed fixture
+        # owner. Its public CLI generates a different key; record that defect,
+        # without altering the old contract or claiming an authorized upgrade.
+        assert "did not switch" in upgrade["error"]
+        assert read_accounts(version.state)[0][address]["data"] == before
+        assert read_accounts(version.state)[0][address]["selected_code_id"] == before_selection
+        assert bytes.fromhex(version.call(address, "causal.a.version")["raw_state"])[16] == 1
     version.replay()
 
     for destination_example, callback in [("contract-b", True), ("contract-batch-patch", False)]:
@@ -411,7 +443,12 @@ def run(bundle, evidence, incompatible_state=None, wrong_rustc=None):
         assert "profile" in rejection["error"].lower(), rejection
     else:
         assert process.returncode == 2
-    (evidence / "passed.json").write_text(json.dumps({"passed": True, "bundle": str(bundle)}))
+    (evidence / "passed.json").write_text(json.dumps({
+        "passed": True, "bundle": str(bundle), "authorized_upgrade_passed": current,
+        "historical_limitations": [] if current else [
+            "Fixed example owner differs from the public CLI-generated owner; upgrade rejection was verified."
+        ],
+    }, indent=2))
 
 
 if __name__ == "__main__":
