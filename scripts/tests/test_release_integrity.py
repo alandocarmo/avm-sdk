@@ -54,7 +54,15 @@ def payload():
         "file": "licenses/toolchain/COPYRIGHT-library.html",
         "sha256": digest(files["licenses/toolchain/COPYRIGHT-library.html"]),
     }]}})
-    files["provenance/cargo-artifacts.jsonl"] = b"".join(json_bytes({
+    features = next(line.split(b"=", 1)[1].decode().split(",") for line in profile.splitlines()
+                    if line.startswith(b"wasmtime_required_features="))
+    engine_id = "registry+https://github.com/rust-lang/crates.io-index#wasmtime@36.0.12"
+    engine = {"package_id": engine_id, "features": features,
+              "scope": "Inert independent regression fixture; no compiler executed"}
+    files["provenance/cargo-artifacts.jsonl"] = json_bytes({
+        "reason": "compiler-artifact", "target": {"name": "wasmtime", "kind": ["lib"]},
+        "package_id": engine_id, "features": features,
+    }) + b"".join(json_bytes({
         "reason": "compiler-artifact", "target": {"name": name, "kind": ["bin"]},
         "executable": f"/qualification-target/release/{name}",
     }) for name in ("avm-contract-build", "avm-local-stand")) + json_bytes({"reason": "build-finished", "success": True})
@@ -66,6 +74,7 @@ def payload():
         "lock_sha256": digest(files["provenance/runtime.Cargo.lock"]),
         "compiler_artifacts_sha256": digest(files["provenance/cargo-artifacts.jsonl"]),
         "rustc_verbose": "rustc exact fixture",
+        "engine_builds": {name: engine.copy() for name in ("avm-contract-build", "avm-local-stand")},
         "binaries": {name: digest(data) for name, data in files.items() if name.startswith("bin/")},
     }
     files["provenance/build.json"] = json_bytes(receipt)
@@ -168,6 +177,21 @@ class IntegrityTests(unittest.TestCase):
         files = payload()
         files["bin/avm-local-stand"] = b"unrelated but checksummed binary"
         self.reject(*write_archive(self.root, files))
+
+    def test_per_binary_engine_features_must_match_the_actual_cargo_artifact(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                files = payload()
+                receipt = json.loads(files["provenance/build.json"])
+                if missing:
+                    del receipt["engine_builds"]["avm-local-stand"]
+                else:
+                    receipt["engine_builds"]["avm-local-stand"]["features"].remove("threads")
+                files["provenance/build.json"] = json_bytes(receipt)
+                manifest = json.loads(files["BUILD-MANIFEST.json"])
+                manifest["build_receipt_sha256"] = digest(files["provenance/build.json"])
+                files["BUILD-MANIFEST.json"] = json_bytes(manifest)
+                self.reject(*write_archive(self.root, files))
 
     def test_toolchain_notices_cannot_be_omitted_or_bound_to_another_compiler(self):
         for mismatch in (False, True):
