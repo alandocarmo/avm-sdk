@@ -36,10 +36,7 @@ const fn package_owner_pubkey() -> [u8; 32] {
         return FIXTURE_PACKAGE_OWNER_PUBKEY;
     };
     let bytes = value.as_bytes();
-    assert!(
-        bytes.len() == 64,
-        "AVM_EXAMPLE_PACKAGE_OWNER_PUBKEY must be 64 lowercase hex digits"
-    );
+    assert!(bytes.len() == 64, "AVM_EXAMPLE_PACKAGE_OWNER_PUBKEY must be 64 lowercase hex digits");
     let mut key = [0; 32];
     let mut index = 0;
     while index < key.len() {
