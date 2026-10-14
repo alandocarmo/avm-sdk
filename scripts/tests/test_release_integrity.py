@@ -238,6 +238,8 @@ class IntegrityTests(unittest.TestCase):
             "malformed-boolean": valid.replace(b"consume_fuel=true\n", b"consume_fuel=yes\n"),
             "whitespace": valid.replace(b"consume_fuel=true\n", b"consume_fuel= true\n"),
             "crlf": valid.replace(b"\n", b"\r\n"),
+            "vertical-tab": valid.replace(b"\n", b"\v", 1),
+            "form-feed": valid.replace(b"\n", b"\f", 1),
             "unterminated": valid[:-1],
             "invalid-encoding": valid + b"\xff\n",
         }
