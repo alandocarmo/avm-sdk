@@ -35,6 +35,24 @@ def tracked_files(root, prefix):
     return {name: (root / name).read_bytes() for name in names if name}
 
 
+def native_linker_inputs(compiler, driver, source):
+    directory = compiler.parent.parent / "lib/rustlib/x86_64-unknown-linux-gnu/bin"
+    linker, shim = directory / "rust-lld", directory / "gcc-ld/ld.lld"
+    require(linker.is_file() and shim.is_file(), "pinned native rust-lld or driver shim is missing")
+    # Rust's cc driver normally uses bundled LLD and may retry without it. Supply
+    # the selection again as user link arguments, which survive that retry and
+    # fail closed if this driver cannot use the pinned linker.
+    args = ["-B" + str(shim.parent), "-fuse-ld=lld"]
+    selected = capture([str(driver), *args, "-print-prog-name=ld.lld"], source)
+    require(Path(selected).resolve() == shim.resolve(), "native driver did not select the pinned LLD shim")
+    return {"driver": str(driver), "driver_sha256": file_digest(driver),
+            "driver_version": capture([str(driver), "--version"], source),
+            "path": str(linker), "sha256": file_digest(linker),
+            "version": capture([str(linker), "-flavor", "gnu", "--version"], source),
+            "shim": str(shim), "shim_sha256": file_digest(shim),
+            "rustflags": ["-Clink-arg=" + arg for arg in args]}
+
+
 def toolchain_notices(sysroot, rustc_verbose):
     """Preserve Rust 1.93.0's own notices, including non-Cargo library vendors."""
     sysroot = sysroot.resolve()
@@ -183,16 +201,12 @@ def build(source, sdk, output, gates):
     require(f"release: {profile['rustc_version']}" in rustc.splitlines() and f"commit-hash: {profile['rustc_commit']}" in rustc.splitlines(), "rustc identity mismatch")
     require(f"release: {profile['cargo_version']}" in cargo.splitlines() and f"commit-hash: {profile['cargo_commit']}" in cargo.splitlines(), "Cargo identity mismatch")
     linker = Path(shutil.which("cc")).resolve()
-    ld_name = capture([str(linker), "-print-prog-name=ld"], source)
-    ld_path = Path(ld_name) if "/" in ld_name else Path(shutil.which(ld_name))
-    if not ld_path.is_absolute():
-        ld_path = source / ld_path
-    ld_path = ld_path.resolve()
-    require(ld_path.is_file(), "native linker reported by cc is unavailable")
+    native_linker = native_linker_inputs(compiler, linker, source)
     # Keep host feature detection dynamic. Compiling the host itself for v3 can
     # constant-fold is_x86_feature_detected! and bypass the engine's CPU rejection.
     # The accepted profile separately fixes Cranelift's guest target to v3.
     flags = f"--cfg tokio_unstable -Ctarget-cpu=x86-64 --remap-path-prefix={source}=/avm/source --remap-path-prefix={target}=/avm/target"
+    flags += " " + " ".join(native_linker["rustflags"])
     environment = os.environ.copy()
     environment.update(RUSTFLAGS=flags, CARGO_INCREMENTAL="0", SOURCE_DATE_EPOCH="0",
                        RUSTC=str(compiler),
@@ -259,10 +273,7 @@ def build(source, sdk, output, gates):
                "target": "x86_64-unknown-linux-gnu", "cpu": "x86-64-v3", "native_target_cpu": "x86-64", "platform": platform,
                "rustc_verbose": rustc, "cargo_verbose": cargo,
                "rustc_binary_sha256": file_digest(compiler),
-               "native_linker": {"driver": str(linker), "driver_sha256": file_digest(linker),
-                                 "driver_version": capture([str(linker), "--version"], source),
-                                 "path": str(ld_path), "sha256": file_digest(ld_path),
-                                 "version": capture([str(ld_path), "--version"], source)},
+               "native_linker": native_linker,
                "argv": argv, "rustflags": flags, "source_date_epoch": 0,
                "compiler_artifacts_sha256": file_digest(output / "cargo-artifacts.jsonl"),
                "resolved_features": {item["package_id"]: sorted(item["features"]) for item in artifacts},

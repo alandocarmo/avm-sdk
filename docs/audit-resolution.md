@@ -28,6 +28,8 @@ release's qualification receipt. A listed assertion is not a claim that it ran.
   compiler/linker identities, resolved dependency/features, actual binary hashes
   and deterministic archive construction are recorded by the manual release
   tooling. Package verification independently rehashes its complete contents.
+  Native link arguments force the pinned rust-lld through its recorded driver
+  shim; independent regressions reject a different or missing linker.
 - **SDK-006 — packaged behavior.** `scripts/tests/packaged_lifecycle.py` builds
   all four public examples using the shipped builder, verifies emitted hashes,
   deploys and calls real code, exercises events, batch patches, contract errors,

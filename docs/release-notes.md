@@ -62,6 +62,8 @@ their lock before building. No alternate compiler or runtime fallback is used.
 Host builds bind clean source heads, a committed runtime lock, actual Cargo
 artifact records, flags, linker and features. Sorted tar entries, normalized
 ownership/modes/timestamps and deterministic gzip make packaging reproducible.
+Native linking pins the compiler's rust-lld and records its driver/shim hashes;
+explicit link arguments prevent a silent retry with an unrelated system linker.
 The SDK Actions publisher is replaced by manual gates; the previous tests are
 retained. Publication requires independent review and green exact-head evidence.
 
