@@ -77,6 +77,21 @@ class FixtureOracleTests(unittest.TestCase):
                                ("recipient", "address", recipient)])
         self.assertEqual(encoded, raw)
 
+    def test_zero_length_lists_keep_their_preorder_target_offsets(self):
+        # https://capnproto.org/encoding.html#canonicalization specifies the
+        # special offset -1 for empty structs only. Empty lists still point to
+        # the next preorder object position, even though they allocate no words.
+        empty = event_bytes(bytes(64), bytes(32), 0, 0, 0, 0, 1, "x", [],
+                            [("a", "data", b"")])
+        # Root: 1 pointer + 4 data + 6 pointer words, followed by 12 source/tx
+        # words and one name word. The topics pointer is word 9, target word 24.
+        self.assertEqual(empty[9 * 8:10 * 8], bytes.fromhex("3900000006000000"))
+        topics = event_bytes(bytes(64), bytes(32), 0, 0, 0, 0, 1, "x", [b"", b"k"],
+                             [("a", "data", b"")])
+        # The two topic pointers occupy words 24/25. Empty Data at word 24
+        # targets word 26, so its signed word offset is one, not zero.
+        self.assertEqual(topics[24 * 8:25 * 8], bytes.fromhex("0500000002000000"))
+
     def test_each_complete_content_and_each_claimed_root_mutation_is_rejected(self):
         expected = {"accounts": {b"a" * 64: b"complete account image"},
                     "account_leaves": {b"a" * 64: b"complete index metadata"},
