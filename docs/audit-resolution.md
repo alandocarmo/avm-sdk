@@ -52,6 +52,8 @@ release's qualification receipt. A listed assertion is not a claim that it ran.
   grants no additional rights and must fail if required notices are missing.
   `test_license_inputs.py` binds omitted notices to exact upstream commits and
   checks crate archive/source hashes independently against the runtime lock.
+  It also requires unchanged Rust 1.93.0 standard-library/vendor and toolchain
+  notices from the pinned sysroot; the installer binds their compiler identity.
 
 Retain every failed gate with its cause. Zero matched tests, unavailable evidence,
 changed inputs after a gate, and an empty-state smoke are not release passes.

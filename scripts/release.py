@@ -114,7 +114,9 @@ def verify_payload(files, tag):
     artifact_records(artifact_bytes)
     notices = json_object(files["THIRD-PARTY-NOTICES.json"])
     require(notices.get("packages"), "missing dependency license inventory")
-    for package in notices["packages"]:
+    toolchain = notices.get("rust_toolchain", {})
+    require(toolchain.get("rustc_verbose") and toolchain["rustc_verbose"] == receipt.get("rustc_verbose"), "missing or mismatched Rust toolchain notices")
+    for package in [*notices["packages"], toolchain]:
         require(package.get("texts"), "missing dependency license text")
         for text in package["texts"]:
             name = text["file"]

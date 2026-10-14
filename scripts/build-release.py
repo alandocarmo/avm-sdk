@@ -16,6 +16,11 @@ import tomllib
 from manual_gates import clean, head
 from release import ARCHIVE, BINARIES, ROOT, artifact_records, digest, file_digest, require, verify_archive
 
+RUST_NOTICE_SHA256 = {
+    "COPYRIGHT.html": "ed776cb483639823551326501ea4a7d0e63a040a5589d25d68234c223bd9d9f9",
+    "COPYRIGHT-library.html": "d93d65853736bde4e8649691233a98848ba709673873aeb39487bc1ca6ee292a",
+}
+
 
 def capture(argv, cwd):
     return subprocess.check_output(argv, cwd=cwd, text=True).strip()
@@ -28,6 +33,24 @@ def json_bytes(value):
 def tracked_files(root, prefix):
     names = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z", "--", prefix]).decode().split("\0")
     return {name: (root / name).read_bytes() for name in names if name}
+
+
+def toolchain_notices(sysroot, rustc_verbose):
+    """Preserve Rust 1.93.0's own notices, including non-Cargo library vendors."""
+    sysroot = sysroot.resolve()
+    texts, files = [], {}
+    for name, expected in sorted(RUST_NOTICE_SHA256.items()):
+        relative = "share/doc/rust/" + name
+        path = sysroot / relative
+        require(path.is_file() and path.resolve().is_relative_to(sysroot), "missing pinned Rust toolchain notice")
+        data = path.read_bytes()
+        require(digest(data) == expected, "Rust 1.93.0 notice differs from its reviewed input")
+        destination = "licenses/toolchain/" + name
+        files[destination] = data
+        texts.append({"file": destination, "sha256": expected, "sysroot_path": relative})
+    return {"rustc_verbose": rustc_verbose,
+            "scope": "COPYRIGHT-library.html covers the Rust standard library and its vendors, whose code can be linked into these executables. COPYRIGHT.html preserves the broader build-toolchain notices; the compiler and every listed component are not thereby claimed to be distributed. Original per-file and dependency scopes apply.",
+            "texts": texts}, files
 
 
 def reviewed_notice(package, notices):
@@ -214,7 +237,8 @@ def build(source, sdk, output, gates):
     for item in artifacts:
         if item["package_id"] in wasmtime_ids:
             require(sorted(item["features"]) == sorted(profile["wasmtime_resolved_features"].split(",")), "actual Wasmtime features differ from the profile")
-    notices, license_files = [], {}
+    rust_notices, license_files = toolchain_notices(compiler.parent.parent, rustc)
+    notices = []
     for package in sorted(packages, key=lambda p: p["id"]):
         directory = Path(package["manifest_path"]).parent
         paths = license_paths(package, source)
@@ -230,7 +254,7 @@ def build(source, sdk, output, gates):
         path = output / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-    (output / "THIRD-PARTY-NOTICES.json").write_bytes(json_bytes({"scope": "Packages reported by Cargo compiler-artifact for these two host executables, including build dependencies; each retains its own grant.", "packages": notices}))
+    (output / "THIRD-PARTY-NOTICES.json").write_bytes(json_bytes({"scope": "Packages reported by Cargo compiler-artifact for these two host executables, including build dependencies; each retains its own grant. Rust standard-library and toolchain notices are recorded separately.", "packages": notices, "rust_toolchain": rust_notices}))
     receipt = {"schema": "gosh.avm-sdk.build.v1", **ids, "binaries": executed,
                "target": "x86_64-unknown-linux-gnu", "cpu": "x86-64-v3", "native_target_cpu": "x86-64", "platform": platform,
                "rustc_verbose": rustc, "cargo_verbose": cargo,
@@ -262,8 +286,10 @@ def package(source, sdk, build_root, output):
         require(digest(data) == receipt["binaries"]["bin/" + name], "binary changed since actual Cargo build")
         require(file_digest(Path(built[name]["executable"])) == digest(data), "package binary differs from Cargo's actual executable")
         files["bin/" + name] = data
-    for path in (build_root / "licenses").rglob("*.txt"):
-        files[path.relative_to(build_root).as_posix()] = path.read_bytes()
+    for path in (build_root / "licenses").rglob("*"):
+        if path.is_file():
+            require(not path.is_symlink(), "packaged license text cannot be a symlink")
+            files[path.relative_to(build_root).as_posix()] = path.read_bytes()
     files["THIRD-PARTY-NOTICES.json"] = (build_root / "THIRD-PARTY-NOTICES.json").read_bytes()
     files["licenses/Acki-Nacki-Node-LICENSE.md"] = (source / "LICENSE.md").read_bytes()
     files["provenance/build.json"] = receipt_bytes

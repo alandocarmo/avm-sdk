@@ -84,6 +84,9 @@ exact owner grant in `licenses/Acki-Nacki-Node-LICENSE.md`, including its origin
 production restrictions and change-license provisions. This release creates no
 new binary grant. THIRD-PARTY-NOTICES.json and bundled texts identify actual
 compiled dependencies (including build dependencies) and their own scopes.
+Rust's unchanged standard-library/vendor notices are included separately from
+Cargo packages. The broader toolchain copyright inventory accompanies build
+provenance; it does not imply that every listed toolchain component is shipped.
 
 ## Qualification and remaining limits
 
