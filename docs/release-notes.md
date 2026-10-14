@@ -151,3 +151,12 @@ generates random identities for each new state and persists their signing keys
 in its owner-private state file; examples are regression/learning fixtures,
 not audited applications. Actual passed results accompany the public release;
 this source document defines their scope without claiming unexecuted gates.
+
+[Issue #13](https://github.com/gosh-sh/avm-sdk/issues/13) reports missing callbacks
+on contract-initiated deploy in the preceding public release. The current
+materializer still lacks deploy success-callback generation. The external
+reproducer was not run against this candidate, and this release does not claim
+a fix or an intentional canonical prohibition. Ordinary-call callback
+qualification does not qualify deploy callbacks. This known limitation remains
+open outside the original ten audit findings and is separate from the absent
+public internal-event read capability.

@@ -40,6 +40,9 @@ release's qualification receipt. A listed assertion is not a claim that it ran.
   tooling. Package verification independently rehashes its complete contents.
   Native link arguments force the pinned rust-lld through its recorded driver
   shim; independent regressions reject a different or missing linker.
+  SDK-R167-007 distinguishes the actual Wasmtime library from its custom-build
+  target. Independent mixed-target, missing/ambiguous-library and rehashed
+  nonlibrary-package regressions preserve strict engine feature attestation.
 - **SDK-006 — packaged behavior.** `scripts/tests/packaged_lifecycle.py` builds
   all four public examples using the shipped builder, verifies emitted hashes,
   deploys and calls real code, exercises events, batch patches, contract errors,
@@ -84,3 +87,8 @@ SDK-R167-005 adds the six existing `avm-wasm-code` integration suites:
 `invalid_forbidden_sections`, `invalid_mvp_function_body` and
 `disabled_feature_encodings`. Each must execute a nonzero test count in the
 accumulated campaign; source check/clippy is not an execution substitute.
+
+Public [issue #13](https://github.com/gosh-sh/avm-sdk/issues/13), missing callbacks
+on contract-initiated deploy, remains outside the original ten-finding closure.
+It is documented in the release notes; ordinary-call callback tests do not
+qualify deploy callbacks, and no fix or candidate reproduction is claimed.

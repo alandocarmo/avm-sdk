@@ -126,6 +126,16 @@ def checksums(data):
     return result
 
 
+def engine_library_artifact(records, package_id):
+    """A package's build script is a distinct target, not its linked engine."""
+    engines = [row for row in records
+               if row.get("reason") == "compiler-artifact" and row.get("package_id") == package_id
+               and row.get("target", {}).get("name") == "wasmtime"
+               and row["target"].get("kind") == ["lib"]]
+    require(len(engines) == 1, "missing or ambiguous engine compiler artifact")
+    return engines[0]
+
+
 def verify_payload(files, tag):
     match = TAG.fullmatch(tag)
     require(match, "invalid immutable release tag")
@@ -166,11 +176,9 @@ def verify_payload(files, tag):
     require(digest(artifact_bytes) == receipt.get("compiler_artifacts_sha256"), "Cargo build record identity mismatch")
     artifact_records(artifact_bytes)
     engine_id = profile["source_registry"] + "#wasmtime@" + profile["wasmtime_version"]
-    engines = [row for row in (json_object(line) for line in artifact_bytes.splitlines() if line.strip())
-               if row.get("reason") == "compiler-artifact" and row.get("package_id") == engine_id
-               and row.get("target", {}).get("name") == "wasmtime"]
-    require(len(engines) == 1, "missing or ambiguous engine compiler artifact")
-    features = engines[0].get("features")
+    engine = engine_library_artifact(
+        (json_object(line) for line in artifact_bytes.splitlines() if line.strip()), engine_id)
+    features = engine.get("features")
     require(isinstance(features, list) and all(isinstance(value, str) for value in features), "invalid engine features")
     require(features == sorted(set(features))
             and set(profile["wasmtime_required_features"].split(",")) <= set(features)

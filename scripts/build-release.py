@@ -14,7 +14,7 @@ import tarfile
 import tomllib
 
 from manual_gates import clean, head
-from release import ARCHIVE, BINARIES, ROOT, artifact_records, digest, file_digest, parse_profile, require, verify_archive
+from release import ARCHIVE, BINARIES, ROOT, artifact_records, digest, engine_library_artifact, file_digest, parse_profile, require, verify_archive
 
 RUST_NOTICE_SHA256 = {
     "COPYRIGHT.html": "ed776cb483639823551326501ea4a7d0e63a040a5589d25d68234c223bd9d9f9",
@@ -248,9 +248,8 @@ def build(source, sdk, output, gates):
         verify_registry_source(package, locked)
     wasmtime_ids = {p["id"] for p in packages if p["name"] == "wasmtime"}
     require(len(wasmtime_ids) == 1, "ambiguous or absent built Wasmtime")
-    wasmtime_builds = [item for item in artifacts if item["package_id"] in wasmtime_ids]
-    require(len(wasmtime_builds) == 1, "ambiguous built Wasmtime feature graph")
-    engine_features = sorted(wasmtime_builds[0]["features"])
+    wasmtime_build = engine_library_artifact(artifacts, next(iter(wasmtime_ids)))
+    engine_features = sorted(wasmtime_build["features"])
     require(set(profile["wasmtime_required_features"].split(",")) <= set(engine_features),
             "built Wasmtime lacks a required explicit-config feature")
     require("component-model-async" not in engine_features, "unqualified component async build feature")
@@ -282,7 +281,7 @@ def build(source, sdk, output, gates):
                "argv": argv, "rustflags": flags, "source_date_epoch": 0,
                "compiler_artifacts_sha256": file_digest(output / "cargo-artifacts.jsonl"),
                "resolved_features": {item["package_id"]: sorted(item["features"]) for item in artifacts},
-               "engine_builds": {name: {"package_id": wasmtime_builds[0]["package_id"],
+               "engine_builds": {name: {"package_id": wasmtime_build["package_id"],
                                          "features": engine_features,
                                          "scope": "Actual shared Wasmtime artifact linked by this combined Cargo build"}
                                  for name in BINARIES},
