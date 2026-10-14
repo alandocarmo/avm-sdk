@@ -31,6 +31,17 @@ def json_bytes(value):
     return (json.dumps(value, sort_keys=True) + "\n").encode()
 
 
+def replace_artifacts(files, records):
+    """Renew every surrounding digest so rejection tests the artifact identity."""
+    files["provenance/cargo-artifacts.jsonl"] = b"".join(json_bytes(row) for row in records)
+    receipt = json.loads(files["provenance/build.json"])
+    receipt["compiler_artifacts_sha256"] = digest(files["provenance/cargo-artifacts.jsonl"])
+    files["provenance/build.json"] = json_bytes(receipt)
+    manifest = json.loads(files["BUILD-MANIFEST.json"])
+    manifest["build_receipt_sha256"] = digest(files["provenance/build.json"])
+    files["BUILD-MANIFEST.json"] = json_bytes(manifest)
+
+
 def payload():
     lock = b"lock fixture\n"
     profile = b"".join(
@@ -139,6 +150,30 @@ class IntegrityTests(unittest.TestCase):
         self.assertEqual((self.sdk_home / "current").resolve(), installed.resolve())
         self.assertEqual((self.bin_dir / "avm-local-stand").read_bytes(), b"stand fixture\n")
         self.assertEqual(self.install(archive, checksum), installed)
+
+    def test_engine_build_script_does_not_replace_or_duplicate_its_library(self):
+        files = payload()
+        records = [json.loads(line) for line in files["provenance/cargo-artifacts.jsonl"].splitlines()]
+        records.insert(0, {"reason": "compiler-artifact", "package_id": records[0]["package_id"],
+                           "target": {"name": "build-script-build", "kind": ["custom-build"]},
+                           "features": []})
+        replace_artifacts(files, records)
+        installed = self.install(*write_archive(self.root, files))
+        self.assertEqual((self.sdk_home / "current").resolve(), installed.resolve())
+
+    def test_rehashed_missing_ambiguous_or_nonlibrary_engine_rejects(self):
+        for mutation in ("missing", "duplicate", "build-script", "binary"):
+            with self.subTest(mutation=mutation):
+                files = payload()
+                records = [json.loads(line) for line in files["provenance/cargo-artifacts.jsonl"].splitlines()]
+                if mutation == "missing":
+                    records.pop(0)
+                elif mutation == "duplicate":
+                    records.insert(0, records[0].copy())
+                else:
+                    records[0]["target"]["kind"] = ["custom-build" if mutation == "build-script" else "bin"]
+                replace_artifacts(files, records)
+                self.reject(*write_archive(self.root, files))
 
     def test_missing_outer_checksum_rejects_before_activation(self):
         archive, checksum = write_archive(self.root)
