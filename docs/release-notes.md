@@ -100,6 +100,14 @@ compact roots/proof negatives, EventLog vectors/rejections, isolated admission,
 stand corrections and the full standard-contract E2E. See the
 [finding-to-diff-to-assertion ledger](audit-resolution.md).
 
+Contract A now accepts a compile-time `AVM_EXAMPLE_PACKAGE_OWNER_PUBKEY` public
+key so the upgrade example can authorize the public stand's generated owner.
+The old fixed fixture key remains the default for source tests. Setting the key
+changes the example's WASM/code identity without changing its ABI or 72-byte
+state schema, and never changes deployed contracts. The immutable historical
+release's example cannot authorize a freshly generated stand owner; historical
+qualification records that rejection rather than claiming a successful upgrade.
+
 The packaged gate independently builds all four public examples with the
 shipped builder and exercises the shipped stand: admission/deploy/call, events,
 batch patches, errors/FUEL, explicit upgrades and populated replay. It verifies
@@ -111,6 +119,7 @@ and the presence of a source test do not establish any of these results.
 This SDK campaign does not establish the production Intel/AMD/masked-feature/
 newer-CPU matrix or registered workload performance. Finite functional checks do
 not prove throughput, deadline compliance or production readiness. The stand
-uses fixed development identities; examples are regression/learning fixtures,
+generates random identities for each new state and persists their signing keys
+in its owner-private state file; examples are regression/learning fixtures,
 not audited applications. Actual passed results accompany the public release;
 this source document defines their scope without claiming unexecuted gates.
