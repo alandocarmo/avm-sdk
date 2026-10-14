@@ -4,7 +4,7 @@ The release resolves the completed SDK-001 through SDK-010 audit as one package.
 This ledger names acceptance assertions; execution results belong to the exact
 release's qualification receipt. A listed assertion is not a claim that it ran.
 
-- **SDK-001 — installer integrity.** `scripts/release.py`, `install.sh`;
+- **SDK-001 — installer integrity.** `scripts/release.py`, `scripts/install.sh`;
   `scripts/tests/test_release_integrity.py` independently constructs valid and
   hostile tar files. Outer/inner hashes, full-commit/tag binding, receipt/binary
   identity, traversal, links, special files, duplicate and unlisted members,
@@ -34,9 +34,13 @@ release's qualification receipt. A listed assertion is not a claim that it ran.
   all four public examples using the shipped builder, verifies emitted hashes,
   deploys and calls real code, exercises events, batch patches, contract errors,
   FUEL exhaustion, authorized/unauthorized upgrade and populated-state replay.
+  Contract A binds the public CLI's generated package-owner key at compile time;
+  malformed key configuration rejects before an executable artifact is admitted.
   An independent state-prefix decoder checks account images and the event-ring
   root. Invalid profiles must reject before committing real execution. Run the
   historical bundle separately; reject its populated state under the candidate.
+  The historical fixed-owner example's upgrade rejection is an explicit limitation,
+  while the candidate must pass the authorized upgrade.
 - **SDK-007 — guest parity.** Distributed guest files match the selected node
   source. Canonical I/O and the seven audited ownership/copy/output assertions
   remain mandatory. All public examples are rebuilt; old contracts stay pinned.

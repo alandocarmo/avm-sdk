@@ -189,7 +189,9 @@ class Journey:
         assert missing["error"] == "funding_required"
         assert self.state.read_bytes() == before, "unfunded deploy must have no state effects"
         address = missing["address"]
-        self.run("fund-user", address=address, shells=100000)
+        # The 64-KiB batch fixture incurs rent at each later logical second.
+        # Fund the entire journey so its error probe reaches real guest code.
+        self.run("fund-user", address=address, shells=1000000)
         deployed = self.run(command, **options)
         assert int(deployed["receipt"]["charged_shells"]) > 0
         assert address in read_accounts(self.state)[0]
