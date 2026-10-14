@@ -3,7 +3,9 @@
 
 import argparse
 import fcntl
+import gzip
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -144,9 +146,14 @@ def verify_archive(archive, checksum, tag):
     outer = checksums(checksum.read_bytes())
     require(set(outer) == {ARCHIVE}, "outer checksum must name exactly this archive")
     require(file_digest(archive) == outer[ARCHIVE], "outer archive checksum mismatch")
+    # Bound the complete tar stream before tarfile interprets a PAX/long-name
+    # header, whose declared metadata length is otherwise parsed internally.
+    with gzip.open(archive, "rb") as compressed:
+        expanded = compressed.read(MAX_BYTES + 1)
+    require(len(expanded) <= MAX_BYTES, "expanded tar stream exceeds limit")
     files, seen, total = {}, set(), 0
     try:
-        with tarfile.open(archive, "r:gz") as source:
+        with tarfile.open(fileobj=io.BytesIO(expanded), mode="r:") as source:
             members = []
             for member in source:
                 require(len(members) < MAX_FILES, "archive member count exceeds limit")

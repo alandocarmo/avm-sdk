@@ -8,6 +8,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -130,6 +131,14 @@ class IntegrityTests(unittest.TestCase):
 
     def test_inner_tampering_with_valid_outer_checksum_rejects(self):
         self.reject(*write_archive(self.root, corrupt_inner=True))
+
+    def test_decompressed_archive_limit_applies_before_tar_metadata_parsing(self):
+        archive, checksum = write_archive(self.root)
+        # The compressed fixture fits; its tar headers and data exceed this cap.
+        limit = archive.stat().st_size + 512
+        with patch.object(release, "MAX_BYTES", limit), patch.object(release.tarfile, "open") as parser:
+            self.reject(archive, checksum)
+            parser.assert_not_called()
 
     def test_checksum_filename_cannot_select_another_file(self):
         archive, checksum = write_archive(self.root)
