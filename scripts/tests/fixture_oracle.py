@@ -114,8 +114,6 @@ def event_bytes(source, tx_hash, lt, time, seq, kind, event_class, name, topics,
         offset = start - pointer - 1
         if item[0] == "bytes":
             data = item[1]
-            if not data:
-                offset = 0
             words[pointer] = 1 | (offset << 2) | (2 << 32) | (len(data) << 35)
             padded = data + bytes((-len(data)) % 8)
             words.extend(int.from_bytes(padded[i:i + 8], "little") for i in range(0, len(padded), 8))
@@ -130,8 +128,6 @@ def event_bytes(source, tx_hash, lt, time, seq, kind, event_class, name, topics,
                 emit(start + len(data) + index, child)
         elif item[0] == "pointers":
             children = item[1]
-            if not children:
-                offset = 0
             words[pointer] = 1 | (offset << 2) | (6 << 32) | (len(children) << 35)
             words.extend([0] * len(children))
             for index, child in enumerate(children):
