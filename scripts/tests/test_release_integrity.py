@@ -38,11 +38,15 @@ def payload():
         "provenance/runtime.Cargo.lock": b"lock fixture\n",
         "LICENSE.md": b"SDK MIT license fixture\n",
         "licenses/Acki-Nacki-Node-LICENSE.md": b"Owner grant fixture\n",
+        "licenses/toolchain/COPYRIGHT-library.html": b"Rust and standard-library vendor grants\n",
     }
     files["THIRD-PARTY-NOTICES.json"] = json_bytes({"packages": [{"name": "fixture", "texts": [{
         "file": "licenses/Acki-Nacki-Node-LICENSE.md",
         "sha256": digest(files["licenses/Acki-Nacki-Node-LICENSE.md"]),
-    }]}]})
+    }]}], "rust_toolchain": {"rustc_verbose": "rustc exact fixture", "texts": [{
+        "file": "licenses/toolchain/COPYRIGHT-library.html",
+        "sha256": digest(files["licenses/toolchain/COPYRIGHT-library.html"]),
+    }]}})
     files["provenance/cargo-artifacts.jsonl"] = b"".join(json_bytes({
         "reason": "compiler-artifact", "target": {"name": name, "kind": ["bin"]},
         "executable": f"/qualification-target/release/{name}",
@@ -54,6 +58,7 @@ def payload():
         "profile_sha256": digest(files["profiles/wasmtime-release-profile.v1"]),
         "lock_sha256": digest(files["provenance/runtime.Cargo.lock"]),
         "compiler_artifacts_sha256": digest(files["provenance/cargo-artifacts.jsonl"]),
+        "rustc_verbose": "rustc exact fixture",
         "binaries": {name: digest(data) for name, data in files.items() if name.startswith("bin/")},
     }
     files["provenance/build.json"] = json_bytes(receipt)
@@ -156,6 +161,21 @@ class IntegrityTests(unittest.TestCase):
         files = payload()
         files["bin/avm-local-stand"] = b"unrelated but checksummed binary"
         self.reject(*write_archive(self.root, files))
+
+    def test_toolchain_notices_cannot_be_omitted_or_bound_to_another_compiler(self):
+        for mismatch in (False, True):
+            with self.subTest(mismatch=mismatch):
+                files = payload()
+                notices = json.loads(files["THIRD-PARTY-NOTICES.json"])
+                if mismatch:
+                    notices["rust_toolchain"]["rustc_verbose"] = "different compiler"
+                else:
+                    del notices["rust_toolchain"]
+                files["THIRD-PARTY-NOTICES.json"] = json_bytes(notices)
+                manifest = json.loads(files["BUILD-MANIFEST.json"])
+                manifest["third_party_notices_sha256"] = digest(files["THIRD-PARTY-NOTICES.json"])
+                files["BUILD-MANIFEST.json"] = json_bytes(manifest)
+                self.reject(*write_archive(self.root, files))
 
     def test_receipt_source_and_lock_are_bound_independently(self):
         for field, value in [("source_commit", "3" * 40), ("lock_sha256", "0" * 64)]:

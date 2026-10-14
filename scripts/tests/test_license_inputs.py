@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -104,6 +105,26 @@ class LicenseInputs(unittest.TestCase):
         archive.write_bytes(archive.read_bytes() + b"altered archive")
         with self.assertRaises(ValueError):
             build_release.verify_registry_source(self.package, lock, cache)
+
+    def test_standard_library_notices_preserve_text_and_reject_missing_or_changed_inputs(self):
+        sysroot = self.root / "sysroot"
+        notice = sysroot / "share/doc/rust/COPYRIGHT-library.html"
+        notice.parent.mkdir(parents=True)
+        original = b"<html>Rust grant; distinct embedded vendor grants</html>"
+        notice.write_bytes(original)
+        pinned = {"COPYRIGHT-library.html": hashlib.sha256(original).hexdigest()}
+        with patch.object(build_release, "RUST_NOTICE_SHA256", pinned):
+            inventory, files = build_release.toolchain_notices(sysroot, "exact rustc identity")
+            name = "licenses/toolchain/COPYRIGHT-library.html"
+            self.assertEqual(files, {name: original})
+            self.assertEqual(inventory["rustc_verbose"], "exact rustc identity")
+            self.assertEqual(inventory["texts"], [{"file": name, "sha256": pinned[notice.name], "sysroot_path": "share/doc/rust/COPYRIGHT-library.html"}])
+            notice.write_bytes(original + b"changed")
+            with self.assertRaises(ValueError):
+                build_release.toolchain_notices(sysroot, "exact rustc identity")
+            notice.unlink()
+            with self.assertRaises(ValueError):
+                build_release.toolchain_notices(sysroot, "exact rustc identity")
 
 
 if __name__ == "__main__":
