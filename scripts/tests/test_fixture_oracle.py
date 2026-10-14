@@ -66,10 +66,14 @@ class FixtureOracleTests(unittest.TestCase):
         source = raw[88:152]
         tx_hash = raw[152:184]
         recipient = bytes.fromhex("bf4b15f21a083c67d64954f5724c6b2fcd1d39e3507af41887d4eb56385ea8163d2add52b7ace38d22fbed4b7e4078d3e48c96d29d20412e63bb02fbbc60ad12")
+        # The owner fixture uses generated_bytes(event_index=10, len=24).
+        # The next byte in its frozen wire is the 'r' of "recipient", not memo.
+        memo = bytes.fromhex("d361503ac1eeffe15468ae5638e24d7836b19312084ca337")
+        self.assertEqual(len(memo), 24)
         encoded = event_bytes(source, tx_hash, 1_000_010, 1_700_000_000, 0, 0,
                               0xb2c99efe4c1931d1, "wallet.transfer", [b"asset/shell", b"\x0a\0\0\0"],
                               [("amount", "u64", 10010),
-                               ("memo", "data", bytes.fromhex("d361503ac1eeffe15468ae5638e24d7836b19312084ca33772")),
+                               ("memo", "data", memo),
                                ("recipient", "address", recipient)])
         self.assertEqual(encoded, raw)
 
