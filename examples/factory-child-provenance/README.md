@@ -80,11 +80,12 @@ instead of `REPRODUCED` in two situations:
   it (case 4). This is the unsettled failed-init path of
   [#13](https://github.com/gosh-sh/avm-sdk/issues/13).
 
-Authenticated sender code identity, as proposed in
-[`docs/protocol-proposals.md`](https://github.com/gosh-sh/avm-sdk/blob/80e60bd954bc4dcd100665baaff99fdf3cd5b8f2/docs/protocol-proposals.md#authenticated-sender-code-identity)
-on the draft branch of [#17](https://github.com/gosh-sh/avm-sdk/pull/17),
-would close case 5. `factory.accept` could then also require that the
-sender's selected code at emission is one the factory trusts. Until then, a
+A guest API that proves the code of an internal sender would close case 5:
+`factory.accept` could then also require that the sender's selected code at
+emission is one the factory trusts. The SDK has no such API, and
+[#13](https://github.com/gosh-sh/avm-sdk/issues/13) tracks it. An earlier
+draft of [#17](https://github.com/gosh-sh/avm-sdk/pull/17) sketched one in
+`docs/protocol-proposals.md`, since removed from the SDK. Until then, a
 factory that needs this property must trust every code that reaches its
 package.
 
