@@ -1,0 +1,37 @@
+[descriptor]
+execution_mode = "message_isolated"
+state_schema_id = "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
+
+[bindings]
+enabled = true
+
+# Explicit resources: the repro only needs a deployment build, not a measurement.
+[build]
+stack_bytes = 16384
+arena_bytes = 65536
+max_memory_bytes = 262144
+
+[abi]
+state_root_type_id = 1
+
+[[abi.types]]
+id = 1
+kind = "fixed_bytes"
+name = "observed_shell_balance"
+len = 16
+
+[[abi.methods]]
+name = "probe.record"
+
+[[abi.methods]]
+name = "probe.refuse"
+
+[[abi.errors]]
+status_code = 1400
+name = "refused"
+message = "probe.refuse always refuses; it changes no state"
+
+[[abi.errors]]
+status_code = 1401
+name = "invalid_call"
+message = "the probe accepts only signed external calls to its two methods"
