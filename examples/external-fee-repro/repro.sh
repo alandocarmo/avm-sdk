@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # What does one signed external message cost the account it is sent to?
-# A stranger's key sends probe.refuse, which the contract refuses (status
-# 1400); the deployer's key sends probe.record, which stores the SHELL balance
-# the account sees. The refused call's cost is read from those balances.
+# A stranger's key (the stand's user) sends probe.refuse; the owner's key (the
+# stand's developer, the deploy's owner_id) sends probe.record, which stores
+# the SHELL balance the account sees. The stranger's call cost is read from
+# those balances.
+#
+# SDK 0.5.1 included the stranger's call, the contract refused it (status
+# 1400) and the destination paid the declared reserve + 1 SHELL. SDK 0.6.0
+# admits an external call only under the owner key the account keeps at
+# owner_key_offset, so the stranger's call is dropped before any charge.
+# This version of the example needs SDK 0.6.0 or later.
 #
 # Requires avm-contract-build, avm-local-stand and jq, from one distribution.
-# Exit status: 0 when no refused call cost the account more than its FUEL,
-# 1 when every refused call cost the account its declared reserve + 1 SHELL.
+# Exit status: 0 when every stranger's call cost the destination nothing,
+# 1 when every one cost the declared reserve + 1 SHELL, 2 on any other result.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,9 +54,11 @@ clock() { echo --block-time "$time" --created-at "$time" --expire-at "$((time + 
 
 "$build" build --manifest-path "$here/Cargo.toml" >"$work/build.log"
 run init --dapp-id "$(printf 'e5%.0s' {1..32})" >"$work/init.json"
+owner="$(jq -r .identities.developer "$work/init.json")"
 
 deploy=(deploy --wasm "$artifacts/contract.wasm" --acab "$artifacts/contract.acab"
-  --descriptor "$artifacts/contract.descriptor" --salt-hex 65787465726e616c2d666565 --init-json null)
+  --descriptor "$artifacts/contract.descriptor" --salt-hex 65787465726e616c2d666565 --init-json null
+  --owner-id "$owner")
 # shellcheck disable=SC2046
 run "${deploy[@]}" $(clock 10000) --quote-address >"$work/quote.json"
 address="$(jq -r .address "$work/quote.json")"
@@ -64,7 +73,7 @@ send() {
   local identity="$1" method="$2" fee="$3" out="$work/call-$((calls++)).json"
   # shellcheck disable=SC2046
   run call --address "$address" --method "$method" --args-json null --identity "$identity" \
-    --extra-currencies '' $(clock "$fee") >"$out" || true
+    --extra-currencies '' $(clock "$fee") >"$out" 2>"$out.stderr" || true
   echo "$out"
 }
 record() {
@@ -81,27 +90,39 @@ next="$(record)"
 reader=$((seen - next))
 seen=$next
 printf 'account funded with %s SHELL; one probe.record (reserve 1) costs %s\n\n' "$funding" "$reader"
-printf '%-12s %-15s %-12s %-14s %-12s\n' identity declared status receipt cost
+printf '%-12s %-15s %-22s %-14s %-12s\n' identity declared outcome receipt cost
 reproduced=0
+free=0
 total=0
 for declared in 1 100 10000 1000000 near; do
   [[ $declared == near ]] && declared=$((seen - reader - 10))
   out="$(send user probe.refuse "$declared")"
-  [[ "$(jq -r .status "$out")" == ok ]] || fail "refused call was not included: ${out##*/}"
-  [[ "$(jq -r '.raw_executor_output[8:16]' "$out")" == "$(le_hex 1400 4)" ]] || fail "expected status 1400 in ${out##*/}"
-  receipt="$(jq -r .receipt.charged_shells "$out")"
+  if [[ "$(jq -r .status "$out")" == ok ]]; then
+    [[ "$(jq -r '.raw_executor_output[8:16]' "$out")" == "$(le_hex 1400 4)" ]] || fail "expected status 1400 in ${out##*/}"
+    outcome=1400 receipt="$(jq -r .receipt.charged_shells "$out")"
+  elif jq -e '.error | test("AccountKeyNotAllowed")' "$out" >/dev/null; then
+    outcome=AccountKeyNotAllowed receipt=-
+  else
+    fail "unexpected result in ${out##*/}"
+  fi
   after="$(record)"
   cost=$((seen - after - reader))
-  printf '%-12s %-15s %-12s %-14s %-12s\n' user "$declared" 1400 "$receipt" "$cost"
+  printf '%-12s %-15s %-22s %-14s %-12s\n' user "$declared" "$outcome" "$receipt" "$cost"
   total=$((total + 1))
-  [[ $cost -eq $((declared + 1)) ]] && reproduced=$((reproduced + 1))
+  if [[ $outcome == 1400 && $cost -eq $((declared + 1)) ]]; then reproduced=$((reproduced + 1)); fi
+  if [[ $outcome == AccountKeyNotAllowed && $cost -eq 0 ]]; then free=$((free + 1)); fi
   seen=$after
 done
-printf '\naccount balance after the refused calls: %s of %s SHELL\n' "$seen" "$funding"
+printf '\naccount balance after the stranger calls: %s of %s SHELL\n' "$seen" "$funding"
 run replay >"$work/replay.json"
 
+if [[ $free -eq $total ]]; then
+  echo "FIXED: each stranger's external message was dropped at admission and cost the destination nothing"
+  exit 0
+fi
 if [[ $reproduced -eq $total ]]; then
   echo "REPRODUCED: each refused external message cost the destination its declared reserve + 1 SHELL"
   exit 1
 fi
-echo "NOT REPRODUCED: $reproduced of $total refused calls cost the declared reserve + 1 SHELL"
+echo "MIXED: $free free, $reproduced charged the declared reserve + 1, of $total stranger calls"
+exit 2

@@ -1,6 +1,8 @@
 [descriptor]
 execution_mode = "message_isolated"
 state_schema_id = "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
+# SDK 0.6.0: only the key kept at data[16..48] signs external calls.
+owner_key_offset = 16
 
 [bindings]
 enabled = true
@@ -17,8 +19,8 @@ state_root_type_id = 1
 [[abi.types]]
 id = 1
 kind = "fixed_bytes"
-name = "observed_shell_balance"
-len = 16
+name = "observed_shell_balance_and_owner_key"
+len = 48
 
 [[abi.methods]]
 name = "probe.record"

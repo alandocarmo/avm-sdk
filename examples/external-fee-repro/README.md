@@ -6,11 +6,15 @@ One contract, two methods:
   balance after this message's own reserve was taken;
 - `probe.refuse` always refuses with status 1400 and changes no state.
 
+The account data is the observed balance (16 bytes) followed by the owner key
+(`owner_key_offset = 16`); `init` writes the deploy's `owner_id` there.
+
 `repro.sh` deploys the probe with 100,000,000 SHELL on a fresh local stand,
-keeps the block time fixed so storage rent does not move the balance, and has
-the stand's `user` key send `probe.refuse` with a growing declared
-`fuel_fee_shells`. The `developer` key reads the balance before and after each
-refused call. The `user` key has no account and no balance.
+with the stand's `developer` key as owner, and keeps the block time fixed so
+storage rent does not move the balance. The stand's `user` key, a stranger to
+the account, sends `probe.refuse` with a growing declared `fuel_fee_shells`;
+the owner reads the balance before and after each call. The `user` key has no
+account and no balance. This version needs SDK 0.6.0 or later.
 
 ```bash
 bash examples/external-fee-repro/repro.sh \
@@ -20,9 +24,27 @@ bash examples/external-fee-repro/repro.sh \
   --out /path/to/new-results
 ```
 
-`jq` is required. Exit status 1 means every refused call cost the destination
-its declared reserve plus 1 SHELL; 0 means at least one did not. On SDK 0.5.1
-(`avm-dev-e2c6abe2bbea-sdk-961760f8cd79`):
+`jq` is required. Exit status 0 means every stranger's call cost the
+destination nothing; 1 means every one cost the declared reserve plus 1 SHELL;
+2 means any other result.
+
+On SDK 0.6.0 (`avm-dev-a86afc46fa2f-sdk-198a7edb5323`) each stranger's call is
+dropped at admission:
+
+```text
+identity     declared        outcome                receipt        cost
+user         1               AccountKeyNotAllowed   -              0
+user         100             AccountKeyNotAllowed   -              0
+user         10000           AccountKeyNotAllowed   -              0
+user         1000000         AccountKeyNotAllowed   -              0
+user         99988965        AccountKeyNotAllowed   -              0
+
+account balance after the stranger calls: 99988975 of 100000000 SHELL
+```
+
+On SDK 0.5.1 (`avm-dev-e2c6abe2bbea-sdk-961760f8cd79`), before owner keys, the
+same calls were included, refused by the contract and charged to the
+destination ([gosh-sh/avm-sdk#36](https://github.com/gosh-sh/avm-sdk/issues/36)):
 
 ```text
 identity     declared        status       receipt        cost
@@ -35,10 +57,6 @@ user         98978860        1400         98978861       98978861
 account balance after the refused calls: 9 of 100000000 SHELL
 ```
 
-The refused call is included (`status: ok`, VM status 1400 in
-`raw_executor_output`), and the receipt charges the destination the whole
-declared reserve plus 1. The reserve is not bounded by what the message FUEL
-cap can buy (about 1,032 SHELL at the 0.5.1 defaults). This is the local
-stand. `runtime-limits.md` says its ordinary `call` rolls back an error and does
-not demonstrate network failure settlement; a contract-level refusal like this
-one is not rolled back: it is included and charged.
+This script measures only the stranger's calls. In a separate token-wallet
+probe on SDK 0.6.0, the owner still paid its own calls, the declared reserve
+plus 1 SHELL, also for a call the contract refused.
